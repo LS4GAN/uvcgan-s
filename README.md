@@ -1,1 +1,308 @@
-The code will be available shortly.
+# UVCGAN-S: Stratified CycleGAN for Unsupervised Data Decomposition
+
+
+
+## Overview
+
+
+This repository provides a reference implementation of Stratified CycleGAN
+(UVCGAN-S), an architecture for unsupervised signal extraction from mixed data.
+
+What problem does Stratified CycleGAN solve?
+
+Suppose you have three datasets. The first contains clean signals. The second
+contains backgrounds. The third contains mixed data where signals and
+backgrounds have been combined in some complicated way. You don't know exactly
+how the mixing happens, and you can't find pairs that show which clean signal
+corresponds to which mixed observation. But you need to take new mixed data and
+decompose it back into signal and background components.
+
+Stratified CycleGAN learns to do this decomposition from unpaired examples.
+You show it random samples of signals, random samples of backgrounds and mixed
+data, and it figures out both how to combine signals and backgrounds into
+realistic mixed data, and how to decompose mixed data back into its parts.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/LS4GAN/gallery/refs/heads/main/uvcgan-s/sphenix.png" width="75%" title="Stratified CycleGAN automatically decomposes mixed data into signal and background components">
+</p>
+
+
+See the [Quick Start](#quick-start-guide) section for a concrete example
+using cat and dog images.
+
+
+## Installation
+
+The package was tested only under Linux systems.
+
+
+### Environment Setup
+
+Development environment based on
+`pytorch/pytorch:1.12.1-cuda11.3-cudnn8-runtime` container.
+
+There are several ways to setup the package environment:
+
+**Option 1: Docker**
+
+Download the docker container `pytorch/pytorch:1.12.1-cuda11.3-cudnn8-runtime`.
+Inside the container, create a virtual environment to avoid package conflicts:
+```bash
+python3 -m venv --system-site-packages ~/.venv/uvcgan-s
+source ~/.venv/uvcgan-s/bin/activate
+```
+
+**Option 2: Conda**
+```bash
+conda env create -f contrib/conda_env.yaml
+conda activate uvcgan-s
+```
+
+### Install Package
+
+Once the environment is set, install the `uvcgan-s` package and its
+requirements:
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+### Environment Variables
+
+By default, UVCGAN-S reads datasets from `./data` and saves models to
+`./outdir`. If any other location is desired, these defaults can be overriden
+with:
+```bash
+export UVCGAN_S_DATA=/path/to/datasets
+export UVCGAN_S_OUTDIR=/path/to/models
+```
+
+## Quick Start Guide
+
+This package was developed for sPHENIX jet signal extraction. However, jet
+signal analysis requires familiarity with sPHENIX-specific reconstruction
+algorithms and jet quality analysis procedures. This section demonstrates
+application of Stratified CycleGAN method on a simpler toy problem with
+intuitive interpretation. The toy example illustrates the basic workflow and
+serves as a template for applying the method to your own data.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/usert5432/gallery/refs/heads/uvcgan-s/uvcgan-s/toy_mixes.png" width="95%" title="Toy images">
+</p>
+
+The toy problem is this: we have images that contain a blurry mix of cat and
+dog faces. The goal is to automatically decompose these mixed images into
+separate cat and dog images. To this end, we present Stratified CycleGAN with
+the mixed images, a random sample of cat images, and a random sample of dog
+images. By observing these three collections, the model learns how cats look on
+average, how dogs look on average, and what would be the best way to decompose
+the current mixed image into a cat and a dog. Importantly, the model is never
+shown training pairs like "this specific mixed image was created from this
+specific cat image and this specific dog image." It only sees random examples
+from each collection and figures out the decomposition on its own.
+
+### Installation
+
+Before proceeding further, the package needs to be installed following
+instructions at the top of this README, if not installed already.
+
+### Dataset Preparation
+
+The toy example uses cat and dog images from the AFHQ dataset. To download and
+preprocess it:
+
+```bash
+# Download the AFHQ dataset
+./scripts/download_dataset.sh afhq
+
+# Resize all images to 256x256 pixels
+python3 scripts/downsize_right.py -s 256 256 -i lanczos \
+    "${UVCGAN_S_DATA:-./data}/afhq/" \
+    "${UVCGAN_S_DATA:-./data}/afhq_resized_lanczos"
+```
+
+The resizing script creates a new directory `afhq_resized_lanczos` containing
+256x256 versions of all images, which is the format expected by the training
+script.
+
+### Training
+
+To train the model, run the following command:
+```bash
+python3 scripts/train/toy_mix_blur/train_uvcgan-s.py
+```
+
+The script trains the Stratified CycleGAN model for 100 epochs. On an RTX 3090
+GPU, each epoch takes approximately 3 minutes, so the complete training process
+requires about 5 hours. The trained model and intermediate checkpoints are
+saved in the directory
+`${UVCGAN_S_OUTDIR:-./outdir}/toy_mix_blur/uvcgan-s/model_m(uvcgan-s)_d(n_layers)_g(vit-modnet)_cat_dog_sub/`.
+
+The structure of the model directory is described in the
+[F.A.Q.](#what-is-the-structure-of-a-model-directory).
+
+### Evaluation
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/usert5432/gallery/refs/heads/uvcgan-s/uvcgan-s/toy_decomposition.png" width="95%" title="Toy images">
+</p>
+
+
+After training completes, the model can be used to decompose images from the
+validation set of AFHQ. Run:
+```bash
+python3 scripts/translate_images.py \
+    "${UVCGAN_S_OUTDIR:-./outdir}/toy_mix_blur/uvcgan-s/cat_dog_sub" \
+    --split val \
+    --domain 2 \
+    --format image
+```
+
+This command takes the mixture cat-dog images (Domain B) and decomposes them
+into separate cat and dog components (Domain A). The `--domain 2` flag
+specifies that the input images come from Domain B, which contains the mixed
+data.
+
+The results are saved in the model directory under
+`evals/final/translated(None)_domain(2)_eval-val/`. This evaluation directory
+contains several subdirectories:
+
+- `fake_a0/` - extracted cat components
+- `fake_a1/` - extracted dog components
+- `real_b/` - original blurred mixture inputs
+
+Each subdirectory contains numbered image files (`sample_0.png`,
+        `sample_1.png`, etc.) corresponding to the validation set.
+
+
+### Adapting to Your Own Data
+
+To apply Stratified CycleGAN to a different decomposition problem, use the toy
+example training script as a starting point. The script
+`scripts/train/toy_mix_blur/train_uvcgan-s.py` contains a declarative
+configuration showing how to structure the three required datasets and set up
+the domain structure for decomposition. For a more complex example, see
+`scripts/train/sphenix/train_uvcgan-s.py`.
+
+
+## sPHENIX Application: Jet Background Subtraction
+
+The package was developed for extracting particle jets from heavy-ion collision
+backgrounds in sPHENIX calorimeter data. This section describes how to
+reproduce the paper results.
+
+### Dataset
+
+The sPHENIX dataset can be downloaded from Zenodo: https://zenodo.org/records/17783990
+
+Alternatively, use the download script:
+```bash
+./scripts/download_dataset.sh sphenix
+```
+
+The dataset contains HDF5 files with calorimeter energy measurements organized
+as 24×64 eta-phi grids. The data is split into training, validation, and test
+sets. Training data consists of three components: PYTHIA jets (the signal
+component), HIJING minimum-bias events (the background component), and
+embedded PYTHIA+HIJING events (the mixed data). The test set uses JEWEL jets
+embedded in HIJING backgrounds. JEWEL models jet-medium interactions
+differently from PYTHIA, providing an out-of-distribution test of the model's
+generalization capability.
+
+
+### Training or Using Pre-trained Model
+
+There are two options for obtaining a trained model: training from scratch or
+downloading the pre-trained model from the paper.
+
+To train a new model from scratch:
+```bash
+python3 scripts/train/sphenix/train_uvcgan-s.py
+```
+
+The training configuration uses the same Stratified CycleGAN architecture as
+the toy example, adapted for single-channel calorimeter data. The trained model
+is saved in the directory
+`${UVCGAN_S_OUTDIR:-./outdir}/sphenix/uvcgan-s/model_m(uvcgan-s)_d(resnet)_g(vit-modnet)_sgn_bkg_sub`
+(see [F.A.Q.](#what-is-the-structure-of-a-model-directory) for details on the
+ model directory structure).
+
+Alternatively, a pre-trained model can be downloaded from Zenodo: https://zenodo.org/records/17809156
+
+The pre-trained model can be used directly for evaluation without retraining.
+
+
+### Evaluation
+
+To evaluate the model on the test set:
+```bash
+python3 scripts/translate_images.py \
+    "${UVCGAN_S_OUTDIR:-./outdir}/path/to/sphenix/model" \
+    --split test \
+    --domain 2 \
+    --format ndarray
+```
+
+The `--format ndarray` flag saves results as NumPy arrays rather than images.
+The output structure is similar to the toy example: extracted signal and
+background components are saved in separate directories under `evals/final/`.
+Each output file contains a 24×64 calorimeter energy grid that can be used for
+physics analysis.
+
+
+# F.A.Q.
+
+## I am training my model on a multi-GPU node. How to make sure that I use only one GPU?
+
+You can specify GPUs that `pytorch` will use with the help of the
+`CUDA_VISIBLE_DEVICES` environment variable. This variable can be set to a list
+of comma-separated GPU indices. When it is set, `pytorch` will only use GPUs
+whose IDs are in the `CUDA_VISIBLE_DEVICES`.
+
+
+## What is the structure of a model directory?
+
+`uvcgan-s` saves each model in a separate directory that contains:
+ - `MODEL/config.json` -- model architecture, training, and evaluation
+    configurations
+ - `MODEL/net_*.pth`  -- PyTorch weights of model networks
+ - `MODEL/opt_*.pth`  -- PyTorch weights of training optimizers
+ - `MODEL/shed_*.pth` -- PyTorch weights of training schedulers
+ - `MODEL/checkpoints/` -- training checkpoints
+ - `MODEL/evals/`     -- evaluation results
+
+
+## Training fails with "Config collision detected" error
+
+`uvcgan-s` enforces a one-model-per-directory policy to prevent accidental
+overwrites of existing models. Each model directory must have a unique
+configuration - if you try to place a model with different settings in a
+directory that already contains a model, you'll receive a "Config collision
+detected" error.
+
+This safeguard helps prevent situations where you might accidentally lose
+trained models by starting a new training run with different parameters in the
+same directory.
+
+Solutions:
+1. To overwrite the old model: delete the old `config.json` configuration file
+   and restart the training process.
+2. To preserve the old model: modify the training script of the new model and
+   update the `label` or `outdir` configuration options to avoid collisions.
+
+
+# LICENSE
+
+`uvcgan-s` is distributed under `BSD-2` license.
+
+`uvcgan-s` repository contains some code (primarily in `uvcgan_s/base`
+subdirectory) from [pytorch-CycleGAN-and-pix2pix][cyclegan_repo].
+This code is also licensed under `BSD-2` license (please refer to
+`uvcgan_s/base/LICENSE` for details).
+
+Each code snippet that was taken from
+[pytorch-CycleGAN-and-pix2pix][cyclegan_repo] has a note about proper copyright
+attribution.
+
+[cyclegan_repo]: https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix
